@@ -39,6 +39,98 @@ function clean(string $key, int $max = 500): string {
     return $v;
 }
 
+// ---- Stage 1 auto-scoring (first pass for evaluators; the key lives in answer_key.php, never in the page) ----
+
+// Every number in a free-text answer; "3/8" -> 0.375, "56.6%" -> 0.566, "10,975.61" -> 10975.61.
+function numbers_in(string $text): array {
+    preg_match_all('/(-?\d[\d,]*(?:\.\d+)?|-?\.\d+)\s*(?:\/\s*(\d+(?:\.\d+)?))?\s*(%)?/', $text, $m, PREG_SET_ORDER);
+    $out = [];
+    foreach ($m as $x) {
+        $v = (float)str_replace(',', '', $x[1]);
+        if (!empty($x[2]) && (float)$x[2] != 0.0) $v /= (float)$x[2];
+        if (!empty($x[3])) $v /= 100;
+        $out[] = $v;
+    }
+    return $out;
+}
+
+function score_attempt(array $answers): array {
+    $keyFile = __DIR__ . '/answer_key.php';
+    if (!is_file($keyFile)) {
+        return ['character_line' => '', 'hard_fail_line' => '', 'aptitude_line' => '',
+                'report' => "Auto-scoring off: answer_key.php is not on the server.\n"];
+    }
+    $key = require $keyFile;
+    $pick = fn(string $id): string => strtoupper(trim((string)($answers[$id] ?? '')));
+
+    // Character gate
+    $preferred = 0; $seen = 0; $fails = []; $lines = [];
+    foreach ($key['character'] as $id => $k) {
+        $a = $pick($id);
+        if ($a === '') { $lines[] = "  $id: —"; continue; }
+        $seen++;
+        if ($a === $k['preferred']) $preferred++;
+        $tag = $a === $k['preferred'] ? 'preferred' : (in_array($a, $k['hard_fail'], true) ? 'HARD FAIL' : 'other');
+        if ($tag === 'HARD FAIL') $fails[] = $id;
+        $lines[] = "  $id: $a ($tag)";
+    }
+    $flags = [];
+    if (in_array($pick('A1'), ['A', 'D'], true)) $flags[] = 'A1 ' . $pick('A1') . ': hard fail if no discomfort shown elsewhere in the set';
+    if ($pick('A1') === 'C' && $pick('A8') === 'C') $flags[] = 'C on both A1 and A8: pattern of aestheticized untruth (hard fail per rubric)';
+    $theater = array_filter(['A3', 'A4', 'A10', 'A11'], fn($id) => in_array($pick($id), ['C', 'D'], true));
+    if (count($theater) >= 3) $flags[] = 'C/D cluster on ' . implode(', ', $theater) . ': "founder-max" theater';
+    if ($pick('A11') === 'D') $flags[] = 'A11 D: honesty-as-brand (soft flag)';
+    $gate = count($fails) <= 1 && count($theater) < 3 ? 'PASS (pending portrait)' : 'HOLD';
+
+    // Aptitude, auto-markable items only
+    $bySec = []; $got = 0; $max = 0; $marks = [];
+    foreach ($key['mcq'] as $id => $ok) {
+        $a = $pick($id); $right = $a !== '' && in_array($a, $ok, true);
+        $sec = $id[0]; $bySec[$sec] = ($bySec[$sec] ?? [0, 0]); $bySec[$sec][1]++; $max++;
+        if ($right) { $bySec[$sec][0]++; $got++; }
+        $marks[] = "  $id: " . ($a === '' ? '—' : $a) . ($right ? ' ✓' : ' ✗') . ' (key ' . implode('/', $ok) . ')';
+    }
+    foreach ($key['numeric'] as $id => $targets) {
+        $text = (string)($answers[$id] ?? '');
+        $nums = numbers_in($text);
+        $right = $text !== '';
+        foreach ($targets as [$want, $tol]) {
+            $hit = false;
+            foreach ($nums as $n) if (abs($n - $want) <= $tol) { $hit = true; break; }
+            $right = $right && $hit;
+        }
+        $sec = $id[0]; $bySec[$sec] = ($bySec[$sec] ?? [0, 0]); $bySec[$sec][1]++; $max++;
+        if ($right) { $bySec[$sec][0]++; $got++; }
+        $marks[] = "  $id: " . ($text === '' ? '—' : '"' . mb_substr($text, 0, 60) . '"') . ($right ? ' ✓' : ' ✗');
+    }
+    ksort($bySec);
+    $secLine = implode('  ', array_map(fn($s, $v) => "$s {$v[0]}/{$v[1]}", array_keys($bySec), $bySec));
+    $pct = $max ? round(100 * $got / $max) : 0;
+
+    $manual = [];
+    foreach ($key['manual'] as $id) {
+        $manual[] = "  $id: " . (trim((string)($answers[$id] ?? '')) === '' ? '(blank)' : trim((string)$answers[$id]));
+    }
+
+    $report = "CHARACTER GATE (Section A): $gate\n"
+            . "Preferred answers: $preferred / 12 (answered $seen)\n"
+            . 'Hard fails: ' . ($fails ? implode(', ', $fails) : 'none') . "\n"
+            . ($flags ? "Flags:\n  " . implode("\n  ", $flags) . "\n" : '')
+            . implode("\n", $lines) . "\n\n"
+            . "APTITUDE, auto-marked items only: $got / $max ($pct%)\n$secLine\n"
+            . "Short answers are matched on the numbers only; confirm them and score the working (0–2) by hand.\n"
+            . implode("\n", $marks) . "\n\n"
+            . "FOR MANUAL SCORING\n" . implode("\n", $manual) . "\n"
+            . "Working for each item is in the answers column of applications.csv (keys ending in ~work).\n";
+
+    return [
+        'character_line' => "$preferred/12",
+        'hard_fail_line' => $fails ? implode(' ', $fails) : 'none',
+        'aptitude_line'  => "$got/$max",
+        'report'         => $report,
+    ];
+}
+
 $type  = clean('type', 20) === 'application' ? 'application' : 'waitlist';
 $email = trim((string)($_POST['email'] ?? ''));
 if (!filter_var($email, FILTER_VALIDATE_EMAIL) || strlen($email) > 254) {
@@ -72,14 +164,21 @@ if ($type === 'waitlist') {
     $subject = 'New waitlist signup: ' . $email;
     $body    = "Email: $email\nTime (UTC): $when\n";
 } else {
+    $answers = json_decode((string)($_POST['answers'] ?? ''), true);
+    $answers = is_array($answers) ? $answers : [];
+    $score   = score_attempt($answers);
+
     $file   = $dataDir . '/applications.csv';
-    $header = ['submitted_at', 'candidate', 'name', 'email', 'work', 'source', 'mode', 'timed_out', 'answered', 'focus_events', 'answers', 'ip'];
+    $header = ['submitted_at', 'candidate', 'name', 'email', 'work', 'source', 'mode', 'timed_out', 'answered', 'focus_events',
+               'character_preferred', 'hard_fails', 'aptitude_auto', 'answers', 'ip'];
     $row    = [$when, clean('candidate', 40), clean('name', 200), $email, clean('work', 2000), clean('source', 300),
-               clean('mode', 20), clean('timed_out', 1), clean('answered', 6), clean('focus_events', 6), clean('answers', 20000), $ip];
+               clean('mode', 20), clean('timed_out', 1), clean('answered', 6), clean('focus_events', 6),
+               $score['character_line'], $score['hard_fail_line'], $score['aptitude_line'], clean('answers', 60000), $ip];
     $subject = 'New Stage 1 application: ' . clean('name', 200);
     $body    = "Name: {$row[2]}\nEmail: $email\nCandidate: {$row[1]}\nMode: {$row[6]}\n"
              . "Answered: {$row[8]}  Timed out: {$row[7]}  Focus events: {$row[9]}\n"
-             . "Source: {$row[5]}\n\nWork / note:\n{$row[4]}\n";
+             . "Source: {$row[5]}\n\nWork / note:\n{$row[4]}\n\n"
+             . $score['report'];
 }
 
 $fh = @fopen($file, 'ab');

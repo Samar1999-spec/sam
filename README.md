@@ -18,7 +18,9 @@ Static site plus one PHP form handler, built for Hostinger (or any Apache + PHP 
 2. Copy `config.example.php` to `config.php` in the same folder and set:
    - `notify_email` — where new signups/applications are emailed.
    - `from_email` — a mailbox on your domain (create it in hPanel → Emails) so mail isn't marked as spam.
-3. Visit your site, join the waitlist, and check that you get the email.
+3. Upload `answer_key.php` (kept out of this public repo; you have it separately) next to `submit.php`.
+   Without it, applications are still saved but not auto-scored.
+4. Visit your site, join the waitlist, and check that you get the email.
 
 ## Where submissions go
 
@@ -32,6 +34,21 @@ Download them from File Manager. To store them elsewhere, set `data_dir` in `con
 
 The handler validates the email, ignores bots via a hidden honeypot field, rate-limits to
 10 submissions per IP per 10 minutes, and escapes values that spreadsheets would treat as formulas.
+
+## Stage 1 application scoring
+
+`apply.html` contains the candidate questions only (Sections A–G). The answer key never goes to the
+browser: `submit.php` loads `answer_key.php` on the server and adds a scoring report to the
+application email and to `applications.csv`:
+
+- **Character gate (Section A):** preferred answers, hard fails, and rubric flags
+  (the A1/A8 pattern, the "founder-max" C/D cluster, A11 soft flag). HOLD if more than one hard fail.
+- **Aptitude:** auto-marks the 39 closed and short-answer items by section. Short answers are
+  matched on their numbers only, so confirm them and score the working (0–2) by hand.
+- **Manual:** B6 and C6 are listed for a person to score. Each item's working is in the CSV
+  under keys ending in `~work`.
+
+`answer_key.php` is git-ignored and blocked by `.htaccess`. Keep it that way: this repo is public.
 
 ## Test locally
 

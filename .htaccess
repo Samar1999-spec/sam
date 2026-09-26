@@ -3,7 +3,7 @@ ErrorDocument 404 /404.html
 Options -Indexes
 
 # Never serve config, data, or repo files
-<FilesMatch "^(config\.php|config\.example\.php|README\.md|\.gitignore)$|\.(csv|log)$">
+<FilesMatch "^(config\.php|config\.example\.php|answer_key\.php|README\.md|\.gitignore)$|\.(csv|log)$">
   Require all denied
 </FilesMatch>
 RedirectMatch 404 /\.git
