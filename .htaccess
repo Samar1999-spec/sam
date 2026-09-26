@@ -1,0 +1,17 @@
+# Method Machine Studio — Apache / Hostinger rules
+ErrorDocument 404 /404.html
+Options -Indexes
+
+# Never serve config, data, or repo files
+<FilesMatch "^(config\.php|config\.example\.php|README\.md|\.gitignore)$|\.(csv|log)$">
+  Require all denied
+</FilesMatch>
+RedirectMatch 404 /\.git
+RedirectMatch 404 /mms-data
+
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+AddType application/manifest+json .webmanifest
